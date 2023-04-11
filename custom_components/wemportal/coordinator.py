@@ -8,6 +8,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import _LOGGER, DEFAULT_TIMEOUT
 from .wemportalapi import WemPortalApi
 
+_LOGGER.info("Coordinator....")
 
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     """DataUpdateCoordinator for wemportal component"""
@@ -22,8 +23,10 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         )
         self.api = api
         self.has = hass
+        _LOGGER.info("Coordinator __init___....")
 
     async def _async_update_data(self):
         """Fetch data from the wemportal api"""
+        _LOGGER.info("Coordinator _async_update_data....")
         async with async_timeout.timeout(DEFAULT_TIMEOUT):
             return await self.hass.async_add_executor_job(self.api.fetch_data)

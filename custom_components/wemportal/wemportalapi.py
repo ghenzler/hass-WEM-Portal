@@ -5,6 +5,7 @@ Weishaupt webscraping and API library
 
 import copy
 import json
+import yaml
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -17,11 +18,17 @@ from scrapy import FormRequest, Spider
 
 from .const import _LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API, START_URLS
 
+from random import randrange
+from .useragents import USER_AGENT_LIST
+_LOGGER.info("USER_AGENT_LIST " + str(USER_AGENT_LIST))
+
+from scrapy.utils.log import configure_logging 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
     def __init__(self, config):
+        _LOGGER.info("WemPortalApi __init__ ")
         self.data = {}
         self.mode = config.get(CONF_MODE)
         self.username = config.get(CONF_USERNAME)
@@ -37,8 +44,11 @@ class WemPortalApi:
         self.modules = None
         self.last_scraping_update = None
         # Headers used for all API calls
+        #userAgentNo = randrange(0, len(USER_AGENT_LIST))
+        userAgent = "WeishauptWEMApp"
+        _LOGGER.info("Using USER_AGENT for API " + str(userAgent))
         self.headers = {
-            "User-Agent": "WeishauptWEMApp",
+            "User-Agent": userAgent,
             "X-Api-Version": "2.0.0.0",
             "Accept": "*/*",
         }
@@ -46,20 +56,51 @@ class WemPortalApi:
 
     def fetch_data(self):
         if self.mode == "web":
+            _LOGGER.info("Mode: web")
             self.fetch_webscraping_data()
         elif self.mode == "api":
+            _LOGGER.info("Mode: api")
             self.fetch_api_data()
         else:
+            _LOGGER.info("Mode: both")
             if (
                 self.last_scraping_update is None
                 or (datetime.now() - self.last_scraping_update + timedelta(seconds=10))
                 > self.scan_interval
             ):
-                self.fetch_webscraping_data()
-                self.fetch_api_data()
-                self.last_scraping_update = datetime.now()
+                
+                try:
+                    _LOGGER.info("fetch_webscraping_data()")
+                    tic = time.perf_counter()
+                    self.fetch_webscraping_data()
+                    toc = time.perf_counter()
+                    _LOGGER.info(f"fetch_webscraping_data() done in {toc - tic:0.1f}s")
+                except Exception as e:
+                    _LOGGER.info("Failed webscraping: "+ str(e))
+
+                try:
+                    _LOGGER.info("fetch_api_data()")
+                    tic = time.perf_counter()
+                    self.fetch_api_data()
+                    toc = time.perf_counter()
+                    _LOGGER.info(f"fetch_api_data() done in {toc - tic:0.1f}s")
+
+                    self.last_scraping_update = datetime.now()
+
+                except Exception as e:
+                    _LOGGER.info("Failed api: "+ str(e))
+
             else:
-                self.fetch_api_data()
+
+                try:
+                    _LOGGER.info("fetch_api_data() only (because last scraping update was too recent)")
+                    tic = time.perf_counter()
+                    self.fetch_api_data()
+                    toc = time.perf_counter()
+                    _LOGGER.info(f"fetch_api_data() done in {toc - tic:0.1f}s")
+                except Exception as e:
+                    _LOGGER.info("Failed api: "+ str(e))
+
         return self.data
 
     def fetch_webscraping_data(self):
@@ -86,10 +127,13 @@ class WemPortalApi:
     def fetch_api_data(self):
         """Get data from the mobile API"""
         if self.session is None:
+            _LOGGER.info("Logging in due to missing session")
             self.api_login()
         if self.device_id is None or self.modules is None:
+            _LOGGER.info("Device ID or modules missing")
             self.get_devices()
             self.get_parameters()
+        _LOGGER.info("ready to get_data()")
         self.get_data()
         return self.data
 
@@ -104,6 +148,7 @@ class WemPortalApi:
         self.session = reqs.Session()
         self.session.cookies.clear()
         self.session.headers.update(self.headers)
+        _LOGGER.info("API Login with user agent: " + self.headers['User-Agent'])
         response = self.session.post(
             "https://www.wemportal.com/app/Account/Login",
             data=payload,
@@ -504,6 +549,10 @@ class WemPortalApi:
                                 "friendlyName": value["friendlyName"],
                                 "platform": "sensor",
                             }
+                            
+        _LOGGER.info("Retrieved values from API for keys:")
+        for key in sorted(self.data.keys()):
+            _LOGGER.info(f"   {key}:  {self.data[key]['value']} {self.data[key]['unit']}")
 
     def friendly_name_mapper(self, value):
         friendly_name_dict = {
@@ -565,12 +614,20 @@ class WemPortalApi:
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
+    userAgentNo = randrange(0, len(USER_AGENT_LIST))
+
+    custom_settings = {
+        'USER_AGENT': USER_AGENT_LIST[userAgentNo]
+    }
 
     custom_settings = {
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
     }
 
     def __init__(self, username, password, **kw):
+        configure_logging(install_root_handler=True)
+        _LOGGER.info("Retrieving Data from WEM Portal by crawling")
+        #_LOGGER.info(" using USER_AGENT " + str(self.userAgentNo+1) +"/" + str(len(USER_AGENT_LIST)) + ": " + str(self.custom_settings['USER_AGENT']))
         self.username = username
         self.password = password
         self.authErrorFlag = False
@@ -705,6 +762,9 @@ class WemPortalSpider(Spider):
                         else:
                             unit = None
 
+                    if(name.endswith('leistungsanforderung')):
+                        unit = '%'
+
                     icon_mapper = defaultdict(lambda: "mdi:flash")
                     icon_mapper["°C"] = "mdi:thermometer"
 
@@ -719,5 +779,9 @@ class WemPortalSpider(Spider):
                     }
                 except IndexError:
                     continue
+
+        _LOGGER.info("Retrieved values from web for keys:")
+        for key in sorted(output.keys()):
+            _LOGGER.info(f"   {key}:  {output[key]['value']} {output[key]['unit']}")
 
         yield output
